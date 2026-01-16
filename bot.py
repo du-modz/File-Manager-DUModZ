@@ -4,7 +4,6 @@ import time
 import os
 import json
 import datetime
-import threading
 
 # --- CONFIGURATION ---
 API_TOKEN = os.getenv('BOT_TOKEN') 
@@ -26,10 +25,11 @@ bot = telebot.TeleBot(API_TOKEN, parse_mode="HTML")
 def load_users():
     try:
         if os.path.exists(DB_FILE):
-            with open(DB_FILE, 'r') as f:
+            with open(DB_FILE, 'r', encoding='utf-8') as f:
                 return json.load(f)
     except Exception as e:
-        log_error(f"DB Load Error: {e}")
+        print(f"[ERROR] DB Load Failed: {e}")
+        return []
     return []
 
 def save_user(user_id):
@@ -37,17 +37,17 @@ def save_user(user_id):
         users = load_users()
         if user_id not in users:
             users.append(user_id)
-            with open(DB_FILE, 'w') as f:
-                json.dump(users, f)
+            with open(DB_FILE, 'w', encoding='utf-8') as f:
+                json.dump(users, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        log_error(f"DB Save Error: {e}")
+        print(f"[ERROR] DB Save Failed: {e}")
 
 # --- LOGGING UTILS ---
 def log_to_channel(message):
     try:
         bot.send_message(LOG_CHANNEL, message, disable_web_page_preview=True)
     except Exception as e:
-        print(f"Log Channel Error: {e}")
+        print(f"[LOG ERROR] {e}")
 
 def log_error(error_msg):
     print(f"[ERROR] {error_msg}")
@@ -211,12 +211,16 @@ def handle_all_messages(message):
         bot.reply_to(message, "❌ <b>Access Restricted!</b>\nJoin @Dark_Unkwon_ModZ to use commands.", reply_markup=get_join_markup())
         return
 
-    # Admin Commands
+    # Admin Commands (Fixed!)
     if user_id == ADMIN_ID:
-        if text.lower() == "/stats":
+        if text.lower() == "/admin":
             users = load_users()
             files = len([f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))])
-            bot.reply_to(message, f"⚙️ <b>Admin Stats</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {files}")
+            bot.reply_to(message, f"⚙️ <b>Admin Panel</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {files}")
+            return
+        elif text.lower() == "/stats":
+            users = load_users()
+            bot.reply_to(message, f"📊 <b>Stats</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {len(os.listdir(FILES_DIR))}")
             return
         elif text.lower().startswith("/broadcast "):
             broadcast_msg = text[12:]
@@ -226,10 +230,23 @@ def handle_all_messages(message):
                 try:
                     bot.send_message(uid, f"📣 <b>Broadcast</b>\n\n{broadcast_msg}")
                     success += 1
-                    time.sleep(0.05)  # Avoid flood
+                    time.sleep(0.05)
                 except: pass
             bot.reply_to(message, f"✅ Broadcast sent to {success}/{len(users)} users.")
             return
+
+    # Special Commands (Fixed!)
+    if text.lower() == "/list":
+        files = [f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))]
+        if not files:
+            bot.reply_to(message, "📁 No files available.")
+            return
+        text = "🛠 <b>Available Files:</b>\n\n"
+        for f in files:
+            name = os.path.splitext(f)[0]
+            text += f"🔹 <code>/{name.lower()}</code>\n"
+        bot.reply_to(message, text)
+        return
 
     # Command-based file request (e.g., /liteapk)
     if text.startswith('/'):
@@ -238,6 +255,14 @@ def handle_all_messages(message):
         if cmd == "start":
             return start_command(message)
 
+        # Admin command check (again, safe guard)
+        if user_id == ADMIN_ID and cmd == "admin":
+            users = load_users()
+            files = len([f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))])
+            bot.reply_to(message, f"⚙️ <b>Admin Panel</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {files}")
+            return
+
+        # File search
         files = os.listdir(FILES_DIR)
         found = None
         for f in files:
@@ -257,7 +282,7 @@ def handle_all_messages(message):
     
     if files:
         markup = types.InlineKeyboardMarkup()
-        for f in files[:10]:  # Limit to 10 results
+        for f in files[:10]:
             markup.add(types.InlineKeyboardButton(f"📥 Get {f}", callback_data=f"dl_{f}"))
         bot.reply_to(message, f"🔍 <b>Found {len(files)} result(s) for '{text}':</b>", reply_markup=markup)
     else:
@@ -265,7 +290,7 @@ def handle_all_messages(message):
 
 # --- START BOT ---
 if __name__ == "__main__":
-    print("🚀 Premium Bot is Running...")
+    print("🚀 DUModZ-24-7-Bot is Running...")
     log_to_channel("🚀 <b>Bot is Online & Advanced System Loaded ✅</b>")
     try:
         bot.infinity_polling(skip_pending=True)
