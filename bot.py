@@ -176,6 +176,9 @@ def get_admin_markup():
     )
     return markup
 
+# --- GLOBAL STATE FOR ADMIN INPUT ---
+user_state = {}  # {user_id: "broadcast"|"ban"|"unban"}
+
 # --- CORE HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start_command(message):
@@ -261,16 +264,22 @@ def handle_callbacks(call):
             if user_id != ADMIN_ID: return
             bot.answer_callback_query(call.id, "📤 Send a message to broadcast (text only).")
             bot.send_message(call.message.chat.id, "📩 <b>Send your broadcast message:</b>\n\n(Only text supported)")
+            user_state[user_id] = "broadcast"
+            return
 
         elif call.data == "admin_ban_info":
             if user_id != ADMIN_ID: return
             bot.answer_callback_query(call.id, "🚫 Reply with user ID to ban.")
             bot.send_message(call.message.chat.id, "🔢 <b>Send User ID to Ban:</b>")
+            user_state[user_id] = "ban"
+            return
 
         elif call.data == "admin_unban_info":
             if user_id != ADMIN_ID: return
             bot.answer_callback_query(call.id, "✅ Reply with user ID to unban.")
             bot.send_message(call.message.chat.id, "🔢 <b>Send User ID to Unban:</b>")
+            user_state[user_id] = "unban"
+            return
 
         elif call.data == "admin_user_list":
             if user_id != ADMIN_ID: return
@@ -330,8 +339,6 @@ def send_file_logic(message, file_name):
         bot.reply_to(message, "🚧 File not found.")
 
 # --- MESSAGE HANDLER (Commands + Admin Actions) ---
-user_state = {}  # For admin input: broadcast, ban, unban
-
 @bot.message_handler(func=lambda m: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
@@ -341,7 +348,7 @@ def handle_all_messages(message):
         bot.reply_to(message, "❌ You are banned from using this bot.")
         return
 
-    # Handle admin input states
+    # --- Handle Admin Input State ---
     if user_id == ADMIN_ID and user_id in user_state:
         action = user_state.pop(user_id)
         if action == "broadcast":
@@ -363,8 +370,10 @@ def handle_all_messages(message):
                 save_banned(banned)
                 bot.reply_to(message, f"🚫 User <code>{target_id}</code> banned successfully.")
                 log_to_channel(f"🚫 <b>Banned</b>\nAdmin: {user_id}\nUser: {target_id}")
-            except:
-                bot.reply_to(message, "❌ Invalid User ID.")
+            except ValueError:
+                bot.reply_to(message, "❌ Invalid User ID. Please send a number.")
+            except Exception as e:
+                bot.reply_to(message, f"❌ Error: {e}")
             return
         elif action == "unban":
             try:
@@ -377,15 +386,18 @@ def handle_all_messages(message):
                     log_to_channel(f"✅ <b>Unbanned</b>\nAdmin: {user_id}\nUser: {target_id}")
                 else:
                     bot.reply_to(message, "ℹ️ User not banned.")
-            except:
-                bot.reply_to(message, "❌ Invalid User ID.")
+            except ValueError:
+                bot.reply_to(message, "❌ Invalid User ID. Please send a number.")
+            except Exception as e:
+                bot.reply_to(message, f"❌ Error: {e}")
             return
 
+    # --- Regular User Commands ---
     if not is_user_joined(user_id):
         bot.reply_to(message, "❌ Join channel first.", reply_markup=get_join_markup())
         return
 
-    # Admin Commands
+    # Admin Commands (Non-State)
     if user_id == ADMIN_ID:
         if text.lower() == "/admin":
             bot.send_photo(message.chat.id, BANNER_URL, caption="🔐 <b>Admin Panel</b>", reply_markup=get_admin_markup())
@@ -401,18 +413,6 @@ def handle_all_messages(message):
                 name = u['name'].replace('<', '&lt;').replace('>', '&gt;')
                 text_resp += f"{status} <a href='tg://user?id={u['id']}'>{name}</a> (<code>{u['id']}</code>)\n"
             bot.send_message(message.chat.id, text_resp, parse_mode="HTML")
-            return
-        elif text.lower() == "/broadcast":
-            user_state[user_id] = "broadcast"
-            bot.reply_to(message, "📤 Send your broadcast message:")
-            return
-        elif text.lower() == "/ban":
-            user_state[user_id] = "ban"
-            bot.reply_to(message, "🔢 Send User ID to ban:")
-            return
-        elif text.lower() == "/unban":
-            user_state[user_id] = "unban"
-            bot.reply_to(message, "🔢 Send User ID to unban:")
             return
 
     # Public Commands
