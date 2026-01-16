@@ -1,0 +1,26 @@
+name: DUModZ-24-7-Bot
+
+on:
+  schedule:
+    - cron: "0 */4 * * *" # প্রতি ৪ ঘণ্টা পর পর রান হবে
+  workflow_dispatch: # ম্যানুয়ালি রান করার জন্য
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run Telegram Bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+        run: python bot.py
