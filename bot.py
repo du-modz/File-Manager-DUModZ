@@ -21,6 +21,31 @@ os.makedirs(FILES_DIR, exist_ok=True)
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode="HTML")
 
+# --- SAFE EDIT HELPERS (Fixes Telegram 400 "message not modified") ---
+def safe_edit_caption(chat_id, message_id, caption, reply_markup=None):
+    try:
+        bot.edit_message_caption(
+            chat_id=chat_id,
+            message_id=message_id,
+            caption=caption,
+            reply_markup=reply_markup
+        )
+    except telebot.apihelper.ApiTelegramException as e:
+        if "message is not modified" not in str(e):
+            raise e
+
+def safe_edit_text(chat_id, message_id, text, reply_markup=None):
+    try:
+        bot.edit_message_text(
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup
+        )
+    except telebot.apihelper.ApiTelegramException as e:
+        if "message is not modified" not in str(e):
+            raise e
+
 # --- DATABASE HELPERS ---
 def load_users():
     try:
@@ -72,7 +97,7 @@ def get_join_markup():
     )
     return markup
 
-def get_main_markup():
+def get_main_markup(user_id=None):
     markup = types.InlineKeyboardMarkup(row_width=2)
     markup.add(
         types.InlineKeyboardButton("📂 All Premium Files", callback_data="list_files"),
@@ -81,6 +106,20 @@ def get_main_markup():
     markup.add(
         types.InlineKeyboardButton("📊 Stats", callback_data="user_stats"),
         types.InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/DarkUnkwon")
+    )
+    # Show Admin Panel only to admin
+    if user_id == ADMIN_ID:
+        markup.add(types.InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_panel"))
+    return markup
+
+def get_admin_markup():
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    markup.add(
+        types.InlineKeyboardButton("📊 Stats", callback_data="admin_stats"),
+        types.InlineKeyboardButton("📤 Export Users", callback_data="admin_export")
+    )
+    markup.add(
+        types.InlineKeyboardButton("🔙 Back to Home", callback_data="back_home")
     )
     return markup
 
@@ -98,7 +137,7 @@ def start_command(message):
         bot.send_photo(
             message.chat.id, BANNER_URL,
             caption=f"🚀 <b>Welcome, {message.from_user.first_name}!</b>\n\nYour premium access is <b>Active</b>. You can now download files using buttons or commands (e.g., <code>/filename</code>).",
-            reply_markup=get_main_markup()
+            reply_markup=get_main_markup(user_id=user_id)
         )
         log_to_channel(f"✅ <b>New Verified User</b>\nID: <code>{user_id}</code>\nName: {message.from_user.full_name}")
     else:
@@ -118,12 +157,14 @@ def handle_callbacks(call):
                 bot.answer_callback_query(call.id, "✅ Verified Successfully!")
                 animations = ["🔍 Checking database...", "🛡️ Verifying access...", "🔓 Unlocking files..."]
                 for text in animations:
-                    bot.edit_message_caption(f"<b>{text}</b>", call.message.chat.id, call.message.message_id)
+                    safe_edit_caption(call.message.chat.id, call.message.message_id, f"<b>{text}</b>")
                     time.sleep(0.5)
                 
-                bot.edit_message_caption(
-                    f"✅ <b>Verification Complete!</b>\n\nWelcome to <b>Dark Unkwon ModZ</b>. Enjoy your premium experience.", 
-                    call.message.chat.id, call.message.message_id, reply_markup=get_main_markup()
+                safe_edit_caption(
+                    call.message.chat.id,
+                    call.message.message_id,
+                    f"✅ <b>Verification Complete!</b>\n\nWelcome to <b>Dark Unkwon ModZ</b>. Enjoy your premium experience.",
+                    reply_markup=get_main_markup(user_id=user_id)
                 )
                 log_to_channel(f"🔓 <b>Verified</b>\nID: <code>{user_id}</code>")
             else:
@@ -145,16 +186,18 @@ def handle_callbacks(call):
                 markup.add(types.InlineKeyboardButton(f"📥 Download {name.replace('_', ' ').title()}", callback_data=f"dl_{f}"))
             
             markup.add(types.InlineKeyboardButton("🔙 Back to Home", callback_data="back_home"))
-            bot.edit_message_caption(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+            safe_edit_caption(call.message.chat.id, call.message.message_id, text, reply_markup=markup)
 
         elif call.data.startswith("dl_"):
             file_name = call.data.replace("dl_", "")
             send_file_logic(call.message, file_name)
 
         elif call.data == "back_home":
-            bot.edit_message_caption(
-                "🔥 <b>Main Menu</b>\n\nSelect an option below:", 
-                call.message.chat.id, call.message.message_id, reply_markup=get_main_markup()
+            safe_edit_caption(
+                call.message.chat.id,
+                call.message.message_id,
+                "🔥 <b>Main Menu</b>\n\nSelect an option below:",
+                reply_markup=get_main_markup(user_id=user_id)
             )
 
         elif call.data == "user_stats":
@@ -167,7 +210,39 @@ def handle_callbacks(call):
                 f"👥 Total Users: {total_users}\n"
                 f"⏰ Time: {datetime.datetime.now().strftime('%I:%M %p')}"
             )
-            bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=get_main_markup())
+            safe_edit_caption(call.message.chat.id, call.message.message_id, msg, reply_markup=get_main_markup(user_id=user_id))
+
+        # --- ADMIN PANEL CALLBACKS ---
+        elif call.data == "admin_panel":
+            if user_id != ADMIN_ID:
+                bot.answer_callback_query(call.id, "❌ Access Denied!", show_alert=True)
+                return
+            safe_edit_caption(
+                call.message.chat.id,
+                call.message.message_id,
+                "🔐 <b>Admin Panel</b>\n\nChoose an action below:",
+                reply_markup=get_admin_markup()
+            )
+
+        elif call.data == "admin_stats":
+            if user_id != ADMIN_ID:
+                return
+            users = load_users()
+            files = len([f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))])
+            msg = f"⚙️ <b>Admin Stats</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {files}"
+            safe_edit_caption(call.message.chat.id, call.message.message_id, msg, reply_markup=get_admin_markup())
+
+        elif call.data == "admin_export":
+            if user_id != ADMIN_ID:
+                return
+            users = load_users()
+            export_path = "users_export.txt"
+            with open(export_path, "w") as f:
+                for uid in users:
+                    f.write(f"{uid}\n")
+            with open(export_path, "rb") as f:
+                bot.send_document(call.message.chat.id, f, caption="📤 <b>User List Exported</b>")
+            os.remove(export_path)
 
     except Exception as e:
         log_error(f"Callback Error: {e}")
@@ -211,56 +286,37 @@ def handle_all_messages(message):
         bot.reply_to(message, "❌ <b>Access Restricted!</b>\nJoin @Dark_Unkwon_ModZ to use commands.", reply_markup=get_join_markup())
         return
 
-    # Admin Commands (Fixed!)
-    if user_id == ADMIN_ID:
-        if text.lower() == "/admin":
-            users = load_users()
-            files = len([f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))])
-            bot.reply_to(message, f"⚙️ <b>Admin Panel</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {files}")
+    # Special Commands
+    if text.lower() == "/admin":
+        if user_id != ADMIN_ID:
+            bot.reply_to(message, "❌ You are not authorized.")
             return
-        elif text.lower() == "/stats":
-            users = load_users()
-            bot.reply_to(message, f"📊 <b>Stats</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {len(os.listdir(FILES_DIR))}")
-            return
-        elif text.lower().startswith("/broadcast "):
-            broadcast_msg = text[12:]
-            users = load_users()
-            success = 0
-            for uid in users:
-                try:
-                    bot.send_message(uid, f"📣 <b>Broadcast</b>\n\n{broadcast_msg}")
-                    success += 1
-                    time.sleep(0.05)
-                except: pass
-            bot.reply_to(message, f"✅ Broadcast sent to {success}/{len(users)} users.")
-            return
+        bot.send_photo(
+            message.chat.id,
+            BANNER_URL,
+            caption="🔐 <b>Admin Panel</b>\n\nUse buttons to manage the bot.",
+            reply_markup=get_admin_markup()
+        )
+        return
 
-    # Special Commands (Fixed!)
     if text.lower() == "/list":
         files = [f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))]
         if not files:
             bot.reply_to(message, "📁 No files available.")
             return
-        text = "🛠 <b>Available Files:</b>\n\n"
+        response = "🛠 <b>Available Files:</b>\n\n"
         for f in files:
             name = os.path.splitext(f)[0]
-            text += f"🔹 <code>/{name.lower()}</code>\n"
-        bot.reply_to(message, text)
+            response += f"🔹 <code>/{name.lower()}</code>\n"
+        bot.reply_to(message, response)
         return
 
     # Command-based file request (e.g., /liteapk)
     if text.startswith('/'):
-        cmd = text[1:].lower().split()[0]  # Ignore extra args
+        cmd = text[1:].lower().split()[0]
         
         if cmd == "start":
             return start_command(message)
-
-        # Admin command check (again, safe guard)
-        if user_id == ADMIN_ID and cmd == "admin":
-            users = load_users()
-            files = len([f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))])
-            bot.reply_to(message, f"⚙️ <b>Admin Panel</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {files}")
-            return
 
         # File search
         files = os.listdir(FILES_DIR)
