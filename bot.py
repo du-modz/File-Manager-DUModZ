@@ -4,42 +4,65 @@ import time
 import os
 import json
 import datetime
+import threading
 
 # --- CONFIGURATION ---
 API_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = 8504263842
 LOG_CHANNEL = "@dumodzbotmanager"
 REQUIRED_CHANNEL_ID = "@Dark_Unkwon_ModZ"
-CHANNEL_URL = "https://t.me/Dark_Unkwon_ModZ"
-BANNER_URL = "https://raw.githubusercontent.com/DarkUnkwon-ModZ/DUModZ-Resource/refs/heads/main/Img/darkunkwonmodz-banner.jpg"
-WEBSITE_URL = "https://darkunkwon-modz.blogspot.com"
+CHANNEL_URL = "https://t.me/Dark_Unkwon_ModZ".strip()
+BANNER_URL = "https://raw.githubusercontent.com/DarkUnkwon-ModZ/DUModZ-Resource/refs/heads/main/Img/darkunkwonmodz-banner.jpg".strip()
+WEBSITE_URL = "https://darkunkwon-modz.blogspot.com".strip()
 FILES_DIR = "files"
 DB_FILE = "users.json"
 
-# ফোল্ডার চেক
-if not os.path.exists(FILES_DIR):
-    os.makedirs(FILES_DIR)
+# Ensure directories exist
+os.makedirs(FILES_DIR, exist_ok=True)
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode="HTML")
 
 # --- DATABASE HELPERS ---
 def load_users():
-    if os.path.exists(DB_FILE):
-        with open(DB_FILE, 'r') as f: return json.load(f)
+    try:
+        if os.path.exists(DB_FILE):
+            with open(DB_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        log_error(f"DB Load Error: {e}")
     return []
 
 def save_user(user_id):
-    users = load_users()
-    if user_id not in users:
-        users.append(user_id)
-        with open(DB_FILE, 'w') as f: json.dump(users, f)
+    try:
+        users = load_users()
+        if user_id not in users:
+            users.append(user_id)
+            with open(DB_FILE, 'w') as f:
+                json.dump(users, f)
+    except Exception as e:
+        log_error(f"DB Save Error: {e}")
+
+# --- LOGGING UTILS ---
+def log_to_channel(message):
+    try:
+        bot.send_message(LOG_CHANNEL, message, disable_web_page_preview=True)
+    except Exception as e:
+        print(f"Log Channel Error: {e}")
+
+def log_error(error_msg):
+    print(f"[ERROR] {error_msg}")
+    try:
+        bot.send_message(ADMIN_ID, f"⚠️ <b>Error Log</b>\n\n<code>{error_msg}</code>", parse_mode="HTML")
+    except: pass
 
 # --- UTILS ---
 def is_user_joined(user_id):
     try:
         member = bot.get_chat_member(REQUIRED_CHANNEL_ID, user_id)
         return member.status in ['member', 'administrator', 'creator']
-    except: return False
+    except Exception as e:
+        log_error(f"Join Check Failed for {user_id}: {e}")
+        return False
 
 def get_join_markup():
     markup = types.InlineKeyboardMarkup(row_width=1)
@@ -69,7 +92,7 @@ def start_command(message):
     save_user(user_id)
     
     bot.send_chat_action(message.chat.id, 'typing')
-    time.sleep(0.5)
+    time.sleep(0.3)
     
     if is_user_joined(user_id):
         bot.send_photo(
@@ -77,6 +100,7 @@ def start_command(message):
             caption=f"🚀 <b>Welcome, {message.from_user.first_name}!</b>\n\nYour premium access is <b>Active</b>. You can now download files using buttons or commands (e.g., <code>/filename</code>).",
             reply_markup=get_main_markup()
         )
+        log_to_channel(f"✅ <b>New Verified User</b>\nID: <code>{user_id}</code>\nName: {message.from_user.full_name}")
     else:
         bot.send_photo(
             message.chat.id, BANNER_URL,
@@ -88,52 +112,68 @@ def start_command(message):
 def handle_callbacks(call):
     user_id = call.from_user.id
     
-    if call.data == "verify_user":
-        if is_user_joined(user_id):
-            bot.answer_callback_query(call.id, "✅ Verified Successfully!")
-            # Animation effect
-            animations = ["🔍 Checking database...", "🛡️ Verifying access...", "🔓 Unlocking files..."]
-            for text in animations:
-                bot.edit_message_caption(f"<b>{text}</b>", call.message.chat.id, call.message.message_id)
-                time.sleep(0.6)
+    try:
+        if call.data == "verify_user":
+            if is_user_joined(user_id):
+                bot.answer_callback_query(call.id, "✅ Verified Successfully!")
+                animations = ["🔍 Checking database...", "🛡️ Verifying access...", "🔓 Unlocking files..."]
+                for text in animations:
+                    bot.edit_message_caption(f"<b>{text}</b>", call.message.chat.id, call.message.message_id)
+                    time.sleep(0.5)
+                
+                bot.edit_message_caption(
+                    f"✅ <b>Verification Complete!</b>\n\nWelcome to <b>Dark Unkwon ModZ</b>. Enjoy your premium experience.", 
+                    call.message.chat.id, call.message.message_id, reply_markup=get_main_markup()
+                )
+                log_to_channel(f"🔓 <b>Verified</b>\nID: <code>{user_id}</code>")
+            else:
+                bot.answer_callback_query(call.id, "❌ You haven't joined the channel yet!", show_alert=True)
+
+        elif call.data == "list_files":
+            bot.send_chat_action(call.message.chat.id, 'typing')
+            files = [f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))]
             
-            bot.edit_message_caption(f"✅ <b>Verification Complete!</b>\n\nWelcome to <b>Dark Unkwon ModZ</b>. Enjoy your premium experience.", 
-                                     call.message.chat.id, call.message.message_id, reply_markup=get_main_markup())
-        else:
-            bot.answer_callback_query(call.id, "❌ Error: You haven't joined yet!", show_alert=True)
+            if not files:
+                bot.answer_callback_query(call.id, "📁 No files available yet!", show_alert=True)
+                return
 
-    elif call.data == "list_files":
-        bot.send_chat_action(call.message.chat.id, 'typing')
-        files = [f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))]
-        
-        if not files:
-            bot.answer_callback_query(call.id, "📁 Database is empty!", show_alert=True)
-            return
+            text = "🛠 <b>Available Premium Files:</b>\n\n"
+            markup = types.InlineKeyboardMarkup(row_width=1)
+            for f in files:
+                name = os.path.splitext(f)[0]
+                text += f"🔹 <code>/{name.lower()}</code>\n"
+                markup.add(types.InlineKeyboardButton(f"📥 Download {name.replace('_', ' ').title()}", callback_data=f"dl_{f}"))
+            
+            markup.add(types.InlineKeyboardButton("🔙 Back to Home", callback_data="back_home"))
+            bot.edit_message_caption(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
 
-        text = "🛠 <b>Available Premium Files:</b>\n\n"
-        markup = types.InlineKeyboardMarkup(row_width=1)
-        for f in files:
-            name = os.path.splitext(f)[0]
-            text += f"🔹 <code>/{name}</code>\n"
-            markup.add(types.InlineKeyboardButton(f"📥 Download {name.replace('_', ' ').title()}", callback_data=f"dl_{f}"))
-        
-        markup.add(types.InlineKeyboardButton("🔙 Back to Home", callback_data="back_home"))
-        bot.edit_message_caption(text, call.message.chat.id, call.message.message_id, reply_markup=markup)
+        elif call.data.startswith("dl_"):
+            file_name = call.data.replace("dl_", "")
+            send_file_logic(call.message, file_name)
 
-    elif call.data.startswith("dl_"):
-        file_name = call.data.replace("dl_", "")
-        send_file_logic(call.message, file_name)
+        elif call.data == "back_home":
+            bot.edit_message_caption(
+                "🔥 <b>Main Menu</b>\n\nSelect an option below:", 
+                call.message.chat.id, call.message.message_id, reply_markup=get_main_markup()
+            )
 
-    elif call.data == "back_home":
-        bot.edit_message_caption("🔥 <b>Main Menu</b>\n\nSelect an option below:", 
-                                 call.message.chat.id, call.message.message_id, reply_markup=get_main_markup())
+        elif call.data == "user_stats":
+            bot.answer_callback_query(call.id, "📊 Loading stats...")
+            total_users = len(load_users())
+            msg = (
+                f"👤 <b>User Info</b>\n\n"
+                f"🆔 ID: <code>{user_id}</code>\n"
+                f"🌟 Role: Premium Member\n"
+                f"👥 Total Users: {total_users}\n"
+                f"⏰ Time: {datetime.datetime.now().strftime('%I:%M %p')}"
+            )
+            bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=get_main_markup())
 
-    elif call.data == "user_stats":
-        bot.answer_callback_query(call.id, "📊 Generating Stats...")
-        msg = f"👤 <b>User Info</b>\n\n🆔 ID: <code>{user_id}</code>\n🌟 Role: Premium Member\n⏰ Time: {datetime.datetime.now().strftime('%I:%M %p')}"
-        bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=get_main_markup())
+    except Exception as e:
+        log_error(f"Callback Error: {e}")
+        bot.answer_callback_query(call.id, "⚠️ Something went wrong. Try again.", show_alert=True)
 
-# --- FILE SENDING LOGIC (With Animations) ---
+# --- FILE SENDING LOGIC ---
 def send_file_logic(message, file_name):
     user_id = message.chat.id if hasattr(message, 'chat') else message.from_user.id
     
@@ -144,77 +184,90 @@ def send_file_logic(message, file_name):
     file_path = os.path.join(FILES_DIR, file_name)
     
     if os.path.exists(file_path):
-        # Notify user that bot is uploading
         status_msg = bot.send_message(message.chat.id, f"⏳ <b>Preparing <code>{file_name}</code>...</b>")
         bot.send_chat_action(message.chat.id, 'upload_document')
-        time.sleep(1.5)
-        
+        time.sleep(1)
+
         try:
             with open(file_path, 'rb') as f:
                 bot.send_document(message.chat.id, f, 
                                   caption=f"✅ <b>File Delivered!</b>\n\n📂 <b>Name:</b> {file_name}\n🚀 <b>From:</b> @Dark_Unkwon_ModZ")
             bot.delete_message(message.chat.id, status_msg.message_id)
+            log_to_channel(f"📥 <b>File Sent</b>\nUser: <code>{user_id}</code>\nFile: <code>{file_name}</code>")
         except Exception as e:
-            bot.edit_message_text(f"❌ <b>Error:</b> {str(e)}", message.chat.id, status_msg.message_id)
+            bot.edit_message_text(f"❌ <b>Send Error:</b> {str(e)}", message.chat.id, status_msg.message_id)
+            log_error(f"File Send Failed ({file_name}) to {user_id}: {e}")
     else:
-        bot.send_message(message.chat.id, f"🚧 <b>File Not Found!</b>\n\n(<code>{file_name}</code>) ইদানীং সার্ভার থেকে সরানো হয়েছে।")
+        bot.send_message(message.chat.id, f"🚧 <b>File Not Found!</b>\n\n(<code>{file_name}</code>) ইদানীং সার্ভার থেকে সরানো হয়েছে।")
 
-# --- SLASH COMMAND & AUTO-FILE HANDLER ---
+# --- MESSAGE HANDLER (Commands + Search) ---
 @bot.message_handler(func=lambda message: True)
 def handle_all_messages(message):
     user_id = message.from_user.id
-    text = message.text
+    text = message.text.strip()
 
     if not is_user_joined(user_id):
         bot.send_chat_action(message.chat.id, 'typing')
-        return bot.reply_to(message, "❌ <b>Access Restricted!</b>\nJoin @Dark_Unkwon_ModZ to use commands.", reply_markup=get_join_markup())
+        bot.reply_to(message, "❌ <b>Access Restricted!</b>\nJoin @Dark_Unkwon_ModZ to use commands.", reply_markup=get_join_markup())
+        return
 
-    # যদি কমান্ড হয় (যেমন /liteapk)
-    if text.startswith('/'):
-        cmd = text[1:].lower()
-        
-        # অ্যাডমিন কমান্ড চেক
-        if cmd == "admin" and user_id == ADMIN_ID:
+    # Admin Commands
+    if user_id == ADMIN_ID:
+        if text.lower() == "/stats":
             users = load_users()
-            bot.reply_to(message, f"⚙️ <b>Admin Panel</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {len(os.listdir(FILES_DIR))}")
+            files = len([f for f in os.listdir(FILES_DIR) if os.path.isfile(os.path.join(FILES_DIR, f))])
+            bot.reply_to(message, f"⚙️ <b>Admin Stats</b>\n\n👥 Total Users: {len(users)}\n📁 Files: {files}")
+            return
+        elif text.lower().startswith("/broadcast "):
+            broadcast_msg = text[12:]
+            users = load_users()
+            success = 0
+            for uid in users:
+                try:
+                    bot.send_message(uid, f"📣 <b>Broadcast</b>\n\n{broadcast_msg}")
+                    success += 1
+                    time.sleep(0.05)  # Avoid flood
+                except: pass
+            bot.reply_to(message, f"✅ Broadcast sent to {success}/{len(users)} users.")
             return
 
-        # ফাইল কমান্ড চেক (Dynamic)
+    # Command-based file request (e.g., /liteapk)
+    if text.startswith('/'):
+        cmd = text[1:].lower().split()[0]  # Ignore extra args
+        
+        if cmd == "start":
+            return start_command(message)
+
         files = os.listdir(FILES_DIR)
-        found = False
+        found = None
         for f in files:
-            if f.lower().startswith(cmd):
-                send_file_logic(message, f)
-                found = True
+            if f.lower().startswith(cmd + ".") or f.lower() == cmd:
+                found = f
                 break
         
-        if not found and cmd != "start":
-            bot.reply_to(message, "❓ <b>Unknown Command!</b>\n\nএই ফাইলটি সার্ভারে নেই। আমাদের /list চেক করুন।")
-    
-    # সাধারণ টেক্সট সার্চ
-    else:
-        bot.send_chat_action(message.chat.id, 'typing')
-        query = text.lower()
-        files = [f for f in os.listdir(FILES_DIR) if query in f.lower()]
-        
-        if files:
-            markup = types.InlineKeyboardMarkup()
-            for f in files:
-                markup.add(types.InlineKeyboardButton(f"📥 Get {f}", callback_data=f"dl_{f}"))
-            bot.reply_to(message, f"🔍 <b>Matching files found for '{text}':</b>", reply_markup=markup)
+        if found:
+            send_file_logic(message, found)
         else:
-            bot.reply_to(message, "😔 দুঃখিত, এই নামে কোনো ফাইল পাওয়া যায়নি।")
+            bot.reply_to(message, "❓ <b>Unknown Command!</b>\n\nএই ফাইলটি সার্ভারে নেই। আমাদের /list চেক করুন।")
+        return
 
-# --- LOGGING ---
-def send_log(status):
-    try:
-        now = datetime.datetime.now().strftime("%I:%M %p | %d-%m-%Y")
-        msg = f"🚀 <b>Bot Update</b>\n\n📡 <b>Status:</b> {status}\n⏰ <b>Time:</b> {now}"
-        bot.send_message(LOG_CHANNEL, msg)
-    except: pass
+    # Text search
+    query = text.lower()
+    files = [f for f in os.listdir(FILES_DIR) if query in f.lower()]
+    
+    if files:
+        markup = types.InlineKeyboardMarkup()
+        for f in files[:10]:  # Limit to 10 results
+            markup.add(types.InlineKeyboardButton(f"📥 Get {f}", callback_data=f"dl_{f}"))
+        bot.reply_to(message, f"🔍 <b>Found {len(files)} result(s) for '{text}':</b>", reply_markup=markup)
+    else:
+        bot.reply_to(message, "😔 দুঃখিত, এই নামে কোনো ফাইল পাওয়া যায়নি।")
 
 # --- START BOT ---
 if __name__ == "__main__":
     print("🚀 Premium Bot is Running...")
-    send_log("Bot is Online & Advanced System Loaded ✅")
-    bot.infinity_polling()
+    log_to_channel("🚀 <b>Bot is Online & Advanced System Loaded ✅</b>")
+    try:
+        bot.infinity_polling(skip_pending=True)
+    except Exception as e:
+        log_error(f"Bot Crashed: {e}")
