@@ -9,8 +9,10 @@ import datetime
 API_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = 8504263842
 LOG_CHANNEL = "@dumodzbotmanager"
-REQUIRED_CHANNEL_ID = "@Dark_Unkwon_ModZ"
-CHANNEL_URL = "https://t.me/Dark_Unkwon_ModZ".strip()
+
+# List of all required channels
+REQUIRED_CHANNELS = ["@DUModZ", "@DU_MODZ", "@Dark_Unkwon_ModZ"]
+
 BANNER_URL = "https://raw.githubusercontent.com/DarkUnkwon-ModZ/DUModZ-Resource/refs/heads/main/Img/darkunkwonmodz-banner.jpg".strip()
 WEBSITE_URL = "https://darkunkwon-modz.blogspot.com".strip()
 FILES_DIR = "files"
@@ -132,18 +134,28 @@ def log_error(e):
 
 # --- UTILS ---
 def is_user_joined(user_id):
-    try:
-        member = bot.get_chat_member(REQUIRED_CHANNEL_ID, user_id)
-        return member.status in ['member', 'administrator', 'creator']
-    except:
-        return False
+    """Checks if the user is a member of ALL required channels."""
+    for channel in REQUIRED_CHANNELS:
+        try:
+            member = bot.get_chat_member(channel, user_id)
+            if member.status not in ['member', 'administrator', 'creator']:
+                return False  # Return False if any one channel is not joined
+        except Exception as e:
+            # If the bot is not an admin in the channel, it might trigger an error
+            return False
+    return True  # Returns True only if the user is in all channels
 
 def get_join_markup():
+    """Generates a list of buttons for all required channels dynamically."""
     markup = types.InlineKeyboardMarkup(row_width=1)
-    markup.add(
-        types.InlineKeyboardButton("📢 Join Our Official Channel", url=CHANNEL_URL),
-        types.InlineKeyboardButton("🔄 Verify Membership", callback_data="verify_user")
-    )
+    
+    # Generate buttons for each channel in the REQUIRED_CHANNELS list
+    for channel in REQUIRED_CHANNELS:
+        url = f"https://t.me/{channel.replace('@', '')}"
+        markup.add(types.InlineKeyboardButton(f"📢 Join {channel}", url=url))
+    
+    # The Verification button
+    markup.add(types.InlineKeyboardButton("🔄 Verify Membership", callback_data="verify_user"))
     return markup
 
 def get_main_markup(user_id=None):
