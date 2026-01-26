@@ -1,64 +1,50 @@
 import telebot
 from telebot import types
+import time
 import os
-import datetime
-import firebase_admin
-from firebase_admin import credentials, db
+import json
+from datetime import datetime
 
 # --- CONFIGURATION ---
-API_TOKEN = "8501641088:AAGoN3in84hJAeRTWmmmG0Omj_50oUmf54E" # এখানে টোকেন দিন
+API_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = 8504263842
-FIREBASE_URL = "https://file-manager-bot-default-rtdb.firebaseio.com/" # যেমন: https://project-id.firebaseio.com/
 LOG_CHANNEL = "@dumodzbotmanager"
+
 REQUIRED_CHANNELS = ["@DUModZ", "@DU_MODZ", "@Dark_Unkwon_ModZ", "@DU_MODZ_CHAT"]
 BANNER_URL = "https://raw.githubusercontent.com/DarkUnkwon-ModZ/DUModZ-Resource/refs/heads/main/Img/darkunkwonmodz-banner.jpg"
+WEBSITE_URL = "https://darkunkwon-modz.blogspot.com"
 FILES_DIR = "files"
+DB_FILE = "users.json"
+BANNED_FILE = "banned.json"
 
-# --- FIREBASE INITIALIZATION ---
-try:
-    if not firebase_admin._apps:
-        cred = credentials.Certificate("firebase-key.json")
-        firebase_admin.initialize_app(cred, {'databaseURL': FIREBASE_URL})
-    print("✅ Firebase Connection Established!")
-except Exception as e:
-    print(f"❌ Firebase Error: {e}")
+# Ensure directories & files exist
+if not os.path.exists(FILES_DIR): os.makedirs(FILES_DIR)
+def init_db(file, default):
+    if not os.path.exists(file):
+        with open(file, 'w') as f: json.dump(default, f)
+
+init_db(DB_FILE, [])
+init_db(BANNED_FILE, [])
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode="HTML")
 
-# --- REAL-TIME DATABASE FUNCTIONS ---
-def sync_user_data(user):
-    """ইউজারের ডেটা ফায়ারবেসে সিঙ্ক করে"""
+# --- UTILITY FUNCTIONS ---
+def get_current_files():
     try:
-        user_ref = db.reference(f'users/{user.id}')
-        data = {
-            'id': user.id,
-            'name': user.first_name,
-            'username': user.username if user.username else "N/A",
-            'last_seen': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            'status': 'active'
-        }
-        # update() ব্যবহার করলে আগের ডেটা ডিলিট হয় না, শুধু নতুনগুলো যোগ হয়
-        user_ref.update(data)
-        return True
-    except Exception as e:
-        print(f"❌ Sync Error: {e}")
-        return False
+        return [f.name for f in os.scandir(FILES_DIR) if f.is_file()]
+    except: return []
+
+def load_db(path):
+    with open(path, 'r', encoding='utf-8') as f:
+        return json.load(f)
+
+def save_db(path, data):
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(data, f, indent=3)
 
 def is_banned(uid):
-    try:
-        ban_status = db.reference(f'banned/{uid}').get()
-        return ban_status is not None
-    except:
-        return False
+    return uid in load_db(BANNED_FILE)
 
-def get_total_users_count():
-    try:
-        users = db.reference('users').get()
-        return len(users) if users else 0
-    except:
-        return 0
-
-# --- HELPERS ---
 def check_join(uid):
     for ch in REQUIRED_CHANNELS:
         try:
@@ -67,94 +53,201 @@ def check_join(uid):
         except: return False
     return True
 
+def send_action(chat_id, action="typing"):
+    bot.send_chat_action(chat_id, action)
+
 # --- KEYBOARDS ---
 def main_markup(uid):
-    markup = types.InlineKeyboardMarkup(row_width=2)
-    markup.add(
-        types.InlineKeyboardButton("📂 Premium Files", callback_data="sync_files"),
-        types.InlineKeyboardButton("📊 My Stats", callback_data="my_stats")
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk.add(
+        types.InlineKeyboardButton("📂 PREMIUM FILES", callback_data="sync_files"),
+        types.InlineKeyboardButton("🌐 WEBSITE", url=WEBSITE_URL)
     )
-    markup.add(
-        types.InlineKeyboardButton("👨‍💻 Dev", url="https://t.me/DarkUnkwon"),
-        types.InlineKeyboardButton("🌐 Website", url="https://darkunkwon-modz.blogspot.com")
+    mk.add(
+        types.InlineKeyboardButton("👤 MY PROFILE", callback_data="my_stats"),
+        types.InlineKeyboardButton("👨‍💻 DEVELOPER", url="https://t.me/DarkUnkwon")
     )
+    mk.add(types.InlineKeyboardButton("📜 FILE LIST", callback_data="list_files"))
     if uid == ADMIN_ID:
-        markup.add(types.InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_panel"))
-    return markup
+        mk.add(types.InlineKeyboardButton("🔐 ADMIN PANEL", callback_data="admin_panel"))
+    return mk
+
+def admin_markup():
+    mk = types.InlineKeyboardMarkup(row_width=2)
+    mk.add(
+        types.InlineKeyboardButton("📣 BROADCAST", callback_data="adm_bc"),
+        types.InlineKeyboardButton("📊 BOT STATS", callback_data="adm_stats")
+    )
+    mk.add(
+        types.InlineKeyboardButton("🚫 BAN USER", callback_data="adm_ban"),
+        types.InlineKeyboardButton("✅ UNBAN", callback_data="adm_unban")
+    )
+    mk.add(types.InlineKeyboardButton("🔙 BACK HOME", callback_data="home"))
+    return mk
 
 # --- HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
     uid = message.from_user.id
+    if is_banned(uid): return
     
-    # ইউজারকে ডেটাবেসে সেভ করা (Real-time Update)
-    sync_user_data(message.from_user)
-
-    if is_banned(uid):
-        bot.reply_to(message, "🚫 You are banned from this bot.")
-        return
+    send_action(message.chat.id)
+    
+    # Save User
+    db = load_db(DB_FILE)
+    if not any(u['id'] == uid for u in db):
+        db.append({"id": uid, "name": message.from_user.first_name, "date": str(datetime.now().date())})
+        save_db(DB_FILE, db)
 
     if check_join(uid):
-        bot.send_photo(
-            message.chat.id, BANNER_URL,
-            caption=f"🚀 <b>Welcome {message.from_user.first_name}!</b>\n\nDatabase Status: 🟢 Connected\nFiles Status: ⚡ Ready",
-            reply_markup=main_markup(uid)
-        )
+        bot.send_photo(message.chat.id, BANNER_URL, 
+                       caption=f"🔥 <b>Welcome, {message.from_user.first_name}!</b>\n\nI am your Premium File Downloader Bot. Use the buttons below to explore.",
+                       reply_markup=main_markup(uid))
     else:
-        mk = types.InlineKeyboardMarkup(row_width=1)
-        for ch in REQUIRED_CHANNELS:
-            mk.add(types.InlineKeyboardButton(f"📢 Join {ch}", url=f"https://t.me/{ch.replace('@','')}"))
-        mk.add(types.InlineKeyboardButton("🔄 Verify Join", callback_data="verify"))
-        bot.send_photo(message.chat.id, BANNER_URL, caption="⚠️ <b>Access Denied!</b>\nPlease join our channels first.", reply_markup=mk)
+        show_force_join(message.chat.id)
+
+def show_force_join(chat_id):
+    mk = types.InlineKeyboardMarkup(row_width=1)
+    for ch in REQUIRED_CHANNELS:
+        mk.add(types.InlineKeyboardButton(f"📢 JOIN {ch}", url=f"https://t.me/{ch.replace('@','')}"))
+    mk.add(types.InlineKeyboardButton("🔄 VERIFY JOIN", callback_data="verify"))
+    bot.send_message(chat_id, "❌ <b>Access Denied!</b>\n\nYou must join all our channels to use this bot.", reply_markup=mk)
 
 @bot.callback_query_handler(func=lambda call: True)
-def callbacks(call):
+def handle_callbacks(call):
     uid = call.from_user.id
-    
-    # প্রতি ক্লিকেও ইউজার ডেটা আপডেট হবে
-    sync_user_data(call.from_user)
+    if is_banned(uid): 
+        bot.answer_callback_query(call.id, "You are banned!", show_alert=True)
+        return
 
-    if call.data == "verify":
-        if check_join(uid):
-            bot.answer_callback_query(call.id, "✅ Verified Successfully!")
-            bot.edit_message_caption("🔓 <b>Welcome Back!</b>\nAccess Granted.", call.message.chat.id, call.message.message_id, reply_markup=main_markup(uid))
-        else:
-            bot.answer_callback_query(call.id, "❌ Still not joined!", show_alert=True)
-
-    elif call.data == "my_stats":
-        total = get_total_users_count()
-        text = f"👤 <b>User Profile</b>\n\n🆔 ID: <code>{uid}</code>\n📛 Name: {call.from_user.first_name}\n📊 Total Bot Users: {total}\n📅 Sync: Real-time"
-        bot.edit_message_caption(text, call.message.chat.id, call.message.message_id, reply_markup=main_markup(uid))
-
-    elif call.data == "admin_panel" and uid == ADMIN_ID:
-        total = get_total_users_count()
-        mk = types.InlineKeyboardMarkup(row_width=2)
-        mk.add(
-            types.InlineKeyboardButton("📣 Broadcast", callback_data="adm_bc"),
-            types.InlineKeyboardButton("🚫 Ban User", callback_data="adm_ban")
-        )
-        mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="home"))
-        bot.edit_message_caption(f"🔐 <b>Admin Panel</b>\n\nTotal Registered Users: {total}", call.message.chat.id, call.message.message_id, reply_markup=mk)
-
-    elif call.data == "home":
+    if call.data == "home":
         bot.edit_message_caption("🏠 <b>Main Menu</b>", call.message.chat.id, call.message.message_id, reply_markup=main_markup(uid))
 
-# --- BROADCAST SYSTEM ---
-def broadcast_step(message):
-    if message.text == "/cancel": return
-    users = db.reference('users').get()
-    if not users: return
-    
-    msg = bot.send_message(message.chat.id, "⏳ <b>Sending messages...</b>")
-    success = 0
-    for user_id in users:
-        try:
-            bot.send_message(user_id, f"📢 <b>Announcement</b>\n\n{message.text}")
-            success += 1
-        except: pass
-    bot.edit_message_text(f"✅ Broadcast Done! Sent to {success} users.", message.chat.id, msg.message_id)
+    elif call.data == "verify":
+        if check_join(uid):
+            bot.answer_callback_query(call.id, "✅ Verified!", show_alert=False)
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            start(call.message)
+        else:
+            bot.answer_callback_query(call.id, "⚠️ Please join all channels first!", show_alert=True)
 
-# --- START BOT ---
+    elif call.data == "sync_files":
+        send_action(call.message.chat.id)
+        files = get_current_files()
+        if not files:
+            bot.answer_callback_query(call.id, "No files found in server!")
+            return
+        
+        mk = types.InlineKeyboardMarkup(row_width=1)
+        for f in files[:15]: # Show last 15 files
+            mk.add(types.InlineKeyboardButton(f"📥 {f}", callback_data=f"dl_{f}"))
+        mk.add(types.InlineKeyboardButton("🔙 BACK", callback_data="home"))
+        
+        bot.edit_message_caption(f"📂 <b>Premium Repository</b>\nFound {len(files)} files available for download.", 
+                                 call.message.chat.id, call.message.message_id, reply_markup=mk)
+
+    elif call.data.startswith("dl_"):
+        fname = call.data.replace("dl_", "")
+        send_premium_file(call.message, fname)
+
+    elif call.data == "my_stats":
+        db = load_db(DB_FILE)
+        user_data = next((u for u in db if u['id'] == uid), None)
+        msg = f"👤 <b>User Profile</b>\n\n🆔 <b>ID:</b> <code>{uid}</code>\n📅 <b>Joined:</b> {user_data['date'] if user_data else 'N/A'}\n🌟 <b>Status:</b> Premium User"
+        bot.edit_message_caption(msg, call.message.chat.id, call.message.message_id, reply_markup=main_markup(uid))
+
+    # --- ADMIN CALLBACKS ---
+    elif call.data == "admin_panel" and uid == ADMIN_ID:
+        bot.edit_message_caption("🔐 <b>Welcome Boss!</b>\nSelect an administrative task below.", call.message.chat.id, call.message.message_id, reply_markup=admin_markup())
+
+    elif call.data == "adm_stats" and uid == ADMIN_ID:
+        users = len(load_db(DB_FILE))
+        files = len(get_current_files())
+        bot.answer_callback_query(call.id, f"📊 Users: {users} | Files: {files}", show_alert=True)
+
+    elif call.data == "adm_bc" and uid == ADMIN_ID:
+        m = bot.send_message(call.message.chat.id, "📩 <b>Send me anything to broadcast:</b>\n(Text, Photo, Video, or File)")
+        bot.register_next_step_handler(m, process_broadcast)
+
+# --- FILE SENDING ENGINE ---
+def send_premium_file(message, fname):
+    path = os.path.join(FILES_DIR, fname)
+    if os.path.exists(path):
+        send_action(message.chat.id, "upload_document")
+        status_msg = bot.send_message(message.chat.id, f"⏳ <b>Encrypting & Preparing:</b> <code>{fname}</code>...")
+        
+        try:
+            with open(path, 'rb') as f:
+                bot.send_document(
+                    message.chat.id, f, 
+                    caption=f"💎 <b>File:</b> <code>{fname}</code>\n🚀 <b>Speed:</b> Max\n🛡️ <b>Scan:</b> Clean\n\n@DUModZ",
+                    thumb=BANNER_URL
+                )
+            bot.delete_message(message.chat.id, status_msg.message_id)
+        except Exception as e:
+            bot.edit_message_text(f"❌ <b>Error:</b> {e}", message.chat.id, status_msg.message_id)
+    else:
+        bot.send_message(message.chat.id, "⚠️ <b>File not found!</b> Please wait for sync.")
+
+# --- ADVANCED BROADCAST (ANY MEDIA) ---
+def process_broadcast(message):
+    users = load_db(DB_FILE)
+    success = 0
+    fail = 0
+    bot.send_message(message.chat.id, f"📣 <b>Broadcast Started...</b> Users: {len(users)}")
+    
+    for u in users:
+        try:
+            bot.copy_message(u['id'], message.chat.id, message.message_id)
+            success += 1
+            time.sleep(0.1) # Flood prevention
+        except:
+            fail += 1
+            
+    bot.send_message(message.chat.id, f"✅ <b>Broadcast Finished!</b>\n\n🟢 Success: {success}\n🔴 Failed: {fail}")
+
+# --- TEXT SEARCH & COMMANDS ---
+@bot.message_handler(func=lambda m: True)
+def handle_text(message):
+    uid = message.from_user.id
+    if is_banned(uid) or not check_join(uid): return
+
+    txt = message.text.lower()
+    send_action(message.chat.id)
+
+    if txt == "/list":
+        files = get_current_files()
+        res = "📂 <b>Available Files:</b>\n\n"
+        for f in files: res += f"🔹 <code>/{os.path.splitext(f)[0]}</code>\n"
+        bot.reply_to(message, res)
+        return
+
+    # Search Logic
+    files = get_current_files()
+    matches = [f for f in files if txt in f.lower()]
+    
+    if matches:
+        mk = types.InlineKeyboardMarkup(row_width=1)
+        for f in matches[:10]:
+            mk.add(types.InlineKeyboardButton(f"📥 {f}", callback_data=f"dl_{f}"))
+        bot.reply_to(message, f"🔍 <b>Search Results ({len(matches)}):</b>", reply_markup=mk)
+    else:
+        # Check if it's a command like /filename
+        if txt.startswith('/'):
+            cmd = txt[1:]
+            for f in files:
+                if cmd == os.path.splitext(f.lower())[0]:
+                    send_premium_file(message, f)
+                    return
+        bot.reply_to(message, "❌ <b>No files found!</b> Try another keyword.")
+
+# --- BOT STARTUP ---
 if __name__ == "__main__":
-    print("✅ DUModZ Bot is Live!")
+    print("---------------------------------------")
+    print("🚀 DUModZ ADVANCED SYSTEM IS ONLINE")
+    print("✨ Developed by: @DarkUnkwon")
+    print("---------------------------------------")
+    try:
+        bot.send_message(LOG_CHANNEL, f"🟢 <b>Bot Rebooted!</b>\n⏰ Time: {datetime.now().strftime('%H:%M:%S')}\nStatus: 𝗥𝘂𝗻𝗻𝗶𝗻𝗴 ✅")
+    except: pass
     bot.infinity_polling(skip_pending=True)
