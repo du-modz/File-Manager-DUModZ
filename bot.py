@@ -260,12 +260,7 @@ def callbacks(call):
 # --- BOOT ---
 if __name__ == "__main__":
     print("🚀 DUModZ PRO System: Online with Group Control")
-    bot.infinity_polling(skip_pending=True) Exception as e:
-            print(f"Polling crashed: {e}")
-            time.sleep(5)ame)
-    if os.path.exists(path):
-        bot.send_chat_action(chat_id, 'upload_document')
-        tmp = bot.send_message(chat_id, f"📡 <b>Preparing:</b> <code>{fname}</code>...")
+    bot.infinity_polling(skip_pending=True)paring:</b> <code>{fname}</code>...")
         try:
             with open(path, 'rb') as f:
                 doc = bot.send_document(chat_id, f, caption=f"💎 <b>{fname}</b>\n🚀 <b>@DUModZ</b>")
