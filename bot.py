@@ -91,12 +91,12 @@ def main_kb(uid):
     mk.add(types.InlineKeyboardButton("📂 View Files", callback_data="all_files"),
            types.InlineKeyboardButton("🌐 Website", url=WEBSITE_URL))
     mk.add(types.InlineKeyboardButton("📊 My Stats", callback_data="stats"),
-           types.InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/DarkUnkwon"))
+           types.InlineKeyboardButton("👨‍💻 Admin", url="https://t.me/DarkUnkwon"))
     if uid == ADMIN_ID:
-        mk.add(types.InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_panel"))
+        mk.add(types.InlineKeyboardButton("🔐 Admin Control", callback_data="admin_panel"))
     return mk
 
-# --- HANDLERS ---
+# --- COMMAND HANDLERS ---
 @bot.message_handler(commands=['start'])
 def start(message):
     uid = message.from_user.id
@@ -111,6 +111,22 @@ def start(message):
             reply_markup=main_kb(uid))
         track_message(message.chat.id, res.message_id)
     else: force_join_msg(message.chat.id)
+
+@bot.message_handler(commands=['help'])
+def help_cmd(message):
+    text = (
+        "📖 <b>DUModZ Help Menu</b>\n\n"
+        "<b>Private Commands:</b>\n"
+        "• /start - Start Bot\n"
+        "• /list - Show all files\n"
+        "• /stats - Profile stats\n\n"
+        "<b>Group Admin Commands:</b>\n"
+        "• /autoclean on/off - Toggle delete\n"
+        "• /settime [hours] - Delete timer\n\n"
+        "💡 <i>Send any filename to search.</i>"
+    )
+    res = bot.reply_to(message, text)
+    track_message(message.chat.id, res.message_id)
 
 @bot.message_handler(commands=['list'])
 def list_files(message):
@@ -153,7 +169,7 @@ def group_config(message):
         bot.reply_to(message, f"⏱️ Timer: <b>{cmd[1]} hours</b>")
     save_db(GROUP_DB, db)
 
-# --- CALLBACKS ---
+# --- CALLBACK ROUTER ---
 @bot.callback_query_handler(func=lambda call: True)
 def cb_handler(call):
     uid = call.from_user.id
@@ -178,6 +194,12 @@ def cb_handler(call):
                 send_f(call.message.chat.id, f, uid)
                 break
 
+    elif call.data == "admin_panel" and uid == ADMIN_ID:
+        mk = types.InlineKeyboardMarkup(row_width=2)
+        mk.add(types.InlineKeyboardButton("📣 Broadcast", callback_data="adm_bc"),
+               types.InlineKeyboardButton("🔄 Sync Engine", callback_data="adm_sync"))
+        bot.edit_message_caption("🔐 <b>Admin Control</b>", call.message.chat.id, call.message.message_id, reply_markup=mk)
+
 # --- MESSAGE HANDLER (Priority Fix) ---
 @bot.message_handler(func=lambda m: True)
 def msg_handler(message):
@@ -193,6 +215,7 @@ def msg_handler(message):
     if not is_joined(uid): return force_join_msg(message.chat.id)
 
     if message.chat.type == "private":
+        bot.send_chat_action(message.chat.id, 'typing')
         matches = [f for f in get_files() if text in f.lower()]
         if matches:
             mk = types.InlineKeyboardMarkup(row_width=1)
@@ -226,35 +249,12 @@ if __name__ == "__main__":
     print("🚀 DUModZ PRO: Online")
     while True:
         try:
+            # Drop pending updates
+            bot.remove_webhook()
             bot.infinity_polling(skip_pending=True, timeout=60)
         except Exception as e:
             print(f"Error: {e}")
-            time.sleep(5)
-def force_join_msg(chat_id):
-    mk = types.InlineKeyboardMarkup(row_width=1)
-    for ch in REQUIRED_CHANNELS:
-        mk.add(types.InlineKeyboardButton(f"📢 Join {ch}", url=f"https://t.me/{ch.replace('@','')}"))
-    mk.add(types.InlineKeyboardButton("🔄 Verify Membership", callback_data="verify"))
-    bot.send_message(chat_id, "⚠️ <b>Access Restricted!</b>\nPlease join our channels to unlock the bot.", reply_markup=mk)
-
-# --- BOOT ---
-if __name__ == "__main__":
-    print("🚀 DUModZ System: ONLINE")
-    try:
-        # কোনো পুরনো ওয়েব হুক থাকলে তা ডিলিট করে ফ্রেশ স্টার্ট করবে
-        bot.remove_webhook()
-        bot.infinity_polling(skip_pending=True)
-    except Exception as e:
-        print(f"Polling Error: {e}")
-        time.sleep(5)age)
-        else: bot.answer_callback_query(call.id, "❌ Join all channels!", show_alert=True)
-    
-    elif call.data == "all_files":
-        files = get_files()
-        mk = types.InlineKeyboardMarkup(row_width=1)
-        for f in files[:15]:
-            mk.add(types.InlineKeyboardButton(f"📥 {f}", callback_data=f"dl_{to_cmd(f)}"))
-        mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="home"))
+            time.sleep(5) # বাগ ফিক্সড: অতিরিক্ত 'age)' মুছে ফেলা হয়েছে.add(types.InlineKeyboardButton("🔙 Back", callback_data="home"))
         bot.edit_message_caption("📂 <b>Select File:</b>", call.message.chat.id, call.message.message_id, reply_markup=mk)
     
     elif call.data == "home":
