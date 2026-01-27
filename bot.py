@@ -4,39 +4,41 @@ import os
 import json
 import time
 import re
+import threading
 from datetime import datetime
 
 # --- CONFIGURATION ---
 API_TOKEN = os.getenv('BOT_TOKEN') 
 ADMIN_ID = 8504263842
-LOG_CHANNEL = "@dumodzbotmanager"
+LOG_CHANNEL = "@dumodzbotmanager" 
 
 REQUIRED_CHANNELS = ["@DUModZ", "@DU_MODZ", "@Dark_Unkwon_ModZ", "@DU_MODZ_CHAT"]
 BANNER_URL = "https://raw.githubusercontent.com/DarkUnkwon-ModZ/DUModZ-Resource/refs/heads/main/Img/darkunkwonmodz-banner.jpg"
 WEBSITE_URL = "https://darkunkwon-modz.blogspot.com"
+
 FILES_DIR = "files"
 DB_FILE = "users.json"
-BANNED_FILE = "banned.json"
+GROUP_DB = "groups.json"
 CACHE_FILE = "sync_cache.json"
 
-# ফোল্ডার চেক
 if not os.path.exists(FILES_DIR): os.makedirs(FILES_DIR)
 
 bot = telebot.TeleBot(API_TOKEN, parse_mode="HTML")
 
 # --- DATABASE ENGINE ---
-def load_db(path):
+def load_db(path, default_type=list):
     if os.path.exists(path):
         with open(path, 'r', encoding='utf-8') as f:
             try: return json.load(f)
-            except: return []
-    return []
+            except: return default_type()
+    return default_type()
 
 def save_db(path, data):
     with open(path, 'w', encoding='utf-8') as f:
         json.dump(data, f, indent=4)
 
 def is_joined(uid):
+    if uid == ADMIN_ID: return True
     for ch in REQUIRED_CHANNELS:
         try:
             s = bot.get_chat_member(ch, uid).status
@@ -44,221 +46,190 @@ def is_joined(uid):
         except: return False
     return True
 
-# --- FILE LOGIC ---
-def get_clean_files():
-    """ফাইল লিস্ট রিটার্ন করে এবং কমান্ড ফ্রেন্ডলি নাম তৈরি করে"""
-    files = [f.name for f in os.scandir(FILES_DIR) if f.is_file()]
-    return sorted(files)
+# --- GROUP AUTO-CLEAN ENGINE ---
+def track_message(chat_id, mid):
+    if chat_id > 0: return 
+    db = load_db(GROUP_DB, dict)
+    cid = str(chat_id)
+    if cid in db and db[cid].get("autoclean"):
+        expiry = time.time() + (db[cid].get("timer", 24) * 3600)
+        if "msgs" not in db[cid]: db[cid]["msgs"] = []
+        db[cid]["msgs"].append({"mid": mid, "exp": expiry})
+        save_db(GROUP_DB, db)
 
-def name_to_cmd(name):
-    """ফাইলের নামকে কমান্ডে রূপান্তর (Space -> Underscore, No extension)"""
-    base = os.path.splitext(name)[0].lower()
-    return re.sub(r'[^a-z0-9_]', '_', base)
+def cleanup_worker():
+    while True:
+        try:
+            db = load_db(GROUP_DB, dict)
+            now = time.time()
+            changed = False
+            for cid, config in db.items():
+                active_msgs = []
+                for m in config.get("msgs", []):
+                    if now > m["exp"]:
+                        try: bot.delete_message(cid, m["mid"])
+                        except: pass
+                        changed = True
+                    else: active_msgs.append(m)
+                db[cid]["msgs"] = active_msgs
+            if changed: save_db(GROUP_DB, db)
+        except: pass
+        time.sleep(60)
+
+threading.Thread(target=cleanup_worker, daemon=True).start()
+
+# --- UTILS ---
+def get_files():
+    return sorted([f.name for f in os.scandir(FILES_DIR) if f.is_file()])
+
+def to_cmd(name):
+    return re.sub(r'[^a-z0-9_]', '_', os.path.splitext(name)[0].lower())
 
 # --- KEYBOARDS ---
-def main_markup(uid):
+def main_kb(uid):
     mk = types.InlineKeyboardMarkup(row_width=2)
-    mk.add(
-        types.InlineKeyboardButton("📂 View All Files", callback_data="all_files"),
-        types.InlineKeyboardButton("🌐 Official Site", url=WEBSITE_URL)
-    )
-    mk.add(
-        types.InlineKeyboardButton("📊 My Stats", callback_data="stats"),
-        types.InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/DarkUnkwon")
-    )
+    mk.add(types.InlineKeyboardButton("📂 View Files", callback_data="all_files"),
+           types.InlineKeyboardButton("🌐 Website", url=WEBSITE_URL))
+    mk.add(types.InlineKeyboardButton("📊 My Stats", callback_data="stats"),
+           types.InlineKeyboardButton("👨‍💻 Developer", url="https://t.me/DarkUnkwon"))
     if uid == ADMIN_ID:
-        mk.add(types.InlineKeyboardButton("🔐 Admin Control", callback_data="admin_panel"))
-    return mk
-
-def admin_markup():
-    mk = types.InlineKeyboardMarkup(row_width=2)
-    mk.add(
-        types.InlineKeyboardButton("📣 Broadcast", callback_data="adm_bc"),
-        types.InlineKeyboardButton("🔄 Sync & Notify", callback_data="adm_sync")
-    )
-    mk.add(types.InlineKeyboardButton("🔙 Back to Home", callback_data="home"))
+        mk.add(types.InlineKeyboardButton("🔐 Admin Panel", callback_data="admin_panel"))
     return mk
 
 # --- HANDLERS ---
-
 @bot.message_handler(commands=['start'])
-def start_cmd(message):
+def start(message):
     uid = message.from_user.id
-    if uid in load_db(BANNED_FILE): return
-
-    # ইউজার সেভ
     db = load_db(DB_FILE)
     if not any(u['id'] == uid for u in db):
         db.append({"id": uid, "name": message.from_user.first_name, "date": str(datetime.now().date())})
         save_db(DB_FILE, db)
 
     if is_joined(uid):
-        bot.send_photo(
-            message.chat.id, BANNER_URL,
-            caption=f"🚀 <b>Welcome {message.from_user.first_name}!</b>\n\nHigh-speed premium files are ready. You can use /list to see all commands or click the button below.",
-            reply_markup=main_markup(uid)
-        )
-    else:
-        force_join(message.chat.id)
+        res = bot.send_photo(message.chat.id, BANNER_URL, 
+            caption=f"🚀 <b>Welcome {message.from_user.first_name}!</b>\nPremium files are ready. Use /list to see all commands.",
+            reply_markup=main_kb(uid))
+        track_message(message.chat.id, res.message_id)
+    else: force_join_msg(message.chat.id)
 
-def force_join(chat_id):
+@bot.message_handler(commands=['list'])
+def list_files(message):
+    if not is_joined(message.from_user.id): return force_join_msg(message.chat.id)
+    files = get_files()
+    if not files:
+        res = bot.reply_to(message, "📂 Repository is empty.")
+    else:
+        text = "📂 <b>Available Premium Files:</b>\n\n"
+        for f in files:
+            text += f"🔹 <code>/{to_cmd(f)}</code>\n"
+        res = bot.send_message(message.chat.id, text)
+    track_message(message.chat.id, res.message_id)
+
+@bot.message_handler(commands=['stats'])
+def stats_cmd(message):
+    uid = message.from_user.id
+    db = load_db(DB_FILE)
+    u = next((i for i in db if i['id'] == uid), {"date": "N/A"})
+    text = f"👤 <b>Stats</b>\n🆔 ID: <code>{uid}</code>\n📅 Joined: {u['date']}\n🛡️ Rank: Premium"
+    res = bot.reply_to(message, text)
+    track_message(message.chat.id, res.message_id)
+
+@bot.message_handler(commands=['autoclean', 'settime'])
+def group_config(message):
+    if message.chat.type == "private": return
+    status = bot.get_chat_member(message.chat.id, message.from_user.id).status
+    if status not in ['administrator', 'creator'] and message.from_user.id != ADMIN_ID: return
+
+    db = load_db(GROUP_DB, dict)
+    cid = str(message.chat.id)
+    if cid not in db: db[cid] = {"autoclean": False, "timer": 24, "msgs": []}
+    
+    cmd = message.text.split()
+    if 'autoclean' in cmd[0] and len(cmd) > 1:
+        db[cid]["autoclean"] = cmd[1].lower() == "on"
+        bot.reply_to(message, f"✅ Auto-Clean: <b>{'ON' if db[cid]['autoclean'] else 'OFF'}</b>")
+    elif 'settime' in cmd[0] and len(cmd) > 1 and cmd[1].isdigit():
+        db[cid]["timer"] = int(cmd[1])
+        bot.reply_to(message, f"⏱️ Timer: <b>{cmd[1]} hours</b>")
+    save_db(GROUP_DB, db)
+
+# --- CALLBACKS ---
+@bot.callback_query_handler(func=lambda call: True)
+def cb_handler(call):
+    uid = call.from_user.id
+    if call.data == "verify":
+        if is_joined(uid):
+            bot.answer_callback_query(call.id, "✅ Verified!")
+            bot.delete_message(call.message.chat.id, call.message.message_id)
+            start(call.message)
+        else: bot.answer_callback_query(call.id, "❌ Join all channels!", show_alert=True)
+    
+    elif call.data == "all_files":
+        files = get_files()
+        mk = types.InlineKeyboardMarkup(row_width=1)
+        for f in files[:15]:
+            mk.add(types.InlineKeyboardButton(f"📥 {f}", callback_data=f"dl_{to_cmd(f)}"))
+        bot.edit_message_caption("📂 <b>Select a file:</b>", call.message.chat.id, call.message.message_id, reply_markup=mk)
+
+    elif call.data.startswith("dl_"):
+        target = call.data.replace("dl_", "")
+        for f in get_files():
+            if to_cmd(f) == target:
+                send_f(call.message.chat.id, f, uid)
+                break
+
+# --- MESSAGE HANDLER (Priority Fix) ---
+@bot.message_handler(func=lambda m: True)
+def msg_handler(message):
+    uid = message.from_user.id
+    text = message.text.lower()
+
+    if text.startswith('/'):
+        clean = text.split('@')[0][1:]
+        for f in get_files():
+            if to_cmd(f) == clean: return send_f(message.chat.id, f, uid)
+        return
+
+    if not is_joined(uid): return force_join_msg(message.chat.id)
+
+    if message.chat.type == "private":
+        matches = [f for f in get_files() if text in f.lower()]
+        if matches:
+            mk = types.InlineKeyboardMarkup(row_width=1)
+            for m in matches[:10]:
+                mk.add(types.InlineKeyboardButton(f"📥 {m}", callback_data=f"dl_{to_cmd(m)}"))
+            res = bot.reply_to(message, f"🔍 <b>Found {len(matches)} matches:</b>", reply_markup=mk)
+            track_message(message.chat.id, res.message_id)
+
+def send_f(chat_id, fname, uid):
+    if not is_joined(uid): return force_join_msg(chat_id)
+    path = os.path.join(FILES_DIR, fname)
+    if os.path.exists(path):
+        bot.send_chat_action(chat_id, 'upload_document')
+        st = bot.send_message(chat_id, f"📡 <b>Preparing:</b> {fname}...")
+        try:
+            with open(path, 'rb') as f:
+                doc = bot.send_document(chat_id, f, caption=f"💎 <b>{fname}</b>\n🚀 <b>@DUModZ</b>")
+            bot.delete_message(chat_id, st.message_id)
+            track_message(chat_id, doc.message_id)
+        except Exception as e: bot.edit_message_text(f"❌ Error: {e}", chat_id, st.message_id)
+
+def force_join_msg(chat_id):
     mk = types.InlineKeyboardMarkup(row_width=1)
     for ch in REQUIRED_CHANNELS:
         mk.add(types.InlineKeyboardButton(f"📢 Join {ch}", url=f"https://t.me/{ch.replace('@','')}"))
     mk.add(types.InlineKeyboardButton("🔄 Verify Membership", callback_data="verify"))
     bot.send_message(chat_id, "⚠️ <b>Access Restricted!</b>\nPlease join our channels to unlock the bot.", reply_markup=mk)
 
-@bot.message_handler(commands=['list'])
-def list_files(message):
-    if not is_joined(message.from_user.id): return force_join(message.chat.id)
-    
-    files = get_clean_files()
-    if not files:
-        bot.reply_to(message, "📂 Repository is empty.")
-        return
-    
-    msg = "📂 <b>Available Premium Files:</b>\n\n"
-    for f in files:
-        cmd = name_to_cmd(f)
-        msg += f"🔹 <code>/{cmd}</code>\n"
-    
-    msg += "\n💡 <i>Click any command to download.</i>"
-    bot.send_message(message.chat.id, msg)
-
-# --- CALLBACK ROUTER ---
-@bot.callback_query_handler(func=lambda call: True)
-def callbacks(call):
-    uid = call.from_user.id
-    if uid in load_db(BANNED_FILE): return
-
-    if call.data == "home":
-        bot.edit_message_caption("🏠 <b>Main Menu</b>", call.message.chat.id, call.message.message_id, reply_markup=main_markup(uid))
-
-    elif call.data == "verify":
-        if is_joined(uid):
-            bot.answer_callback_query(call.id, "✅ Verified!")
-            bot.delete_message(call.message.chat.id, call.message.message_id)
-            start_cmd(call.message)
-        else:
-            bot.answer_callback_query(call.id, "❌ Not joined yet!", show_alert=True)
-
-    elif call.data == "all_files":
-        files = get_clean_files()
-        if not files:
-            bot.answer_callback_query(call.id, "No files found!")
-            return
-        
-        mk = types.InlineKeyboardMarkup(row_width=1)
-        for f in files[:15]:
-            mk.add(types.InlineKeyboardButton(f"📥 {f}", callback_data=f"dl_{f}"))
-        mk.add(types.InlineKeyboardButton("🔙 Back", callback_data="home"))
-        bot.edit_message_caption(f"📂 <b>Select a file to download:</b>", call.message.chat.id, call.message.message_id, reply_markup=mk)
-
-    elif call.data.startswith("dl_"):
-        fname = call.data.replace("dl_", "")
-        send_premium_file(call.message.chat.id, fname)
-
-    elif call.data == "stats":
-        db = load_db(DB_FILE)
-        u_info = next((u for u in db if u['id'] == uid), None)
-        text = f"👤 <b>My Stats</b>\n\n🆔 ID: <code>{uid}</code>\n📅 Joined: {u_info['date'] if u_info else 'N/A'}\n🛡️ Status: Premium Member"
-        bot.edit_message_caption(text, call.message.chat.id, call.message.message_id, reply_markup=main_markup(uid))
-
-    # --- ADMIN ACTIONS ---
-    elif call.data == "admin_panel" and uid == ADMIN_ID:
-        bot.edit_message_caption("🔐 <b>Admin Control Center</b>", call.message.chat.id, call.message.message_id, reply_markup=admin_markup())
-
-    elif call.data == "adm_sync" and uid == ADMIN_ID:
-        bot.answer_callback_query(call.id, "🔄 Syncing...")
-        all_f = get_clean_files()
-        cache = load_db(CACHE_FILE)
-        new_f = [f for f in all_f if f not in cache]
-        
-        if new_f:
-            save_db(CACHE_FILE, all_f)
-            users = load_db(DB_FILE)
-            success = 0
-            for u in users:
-                try:
-                    bot.send_message(u['id'], f"🔥 <b>New Update!</b>\n\n{len(new_f)} new files added to repository.\nUse /list to check them out!")
-                    success += 1
-                    time.sleep(0.05)
-                except: pass
-            bot.send_message(call.message.chat.id, f"✅ Sync Complete. Notified {success} users.")
-        else:
-            bot.answer_callback_query(call.id, "✅ Repository is already up to date!", show_alert=True)
-
-    elif call.data == "adm_bc" and uid == ADMIN_ID:
-        m = bot.send_message(call.message.chat.id, "📣 <b>Broadcast:</b> Send me the message (Text/Media).")
-        bot.register_next_step_handler(m, process_broadcast)
-
-# --- CORE FILE SENDER ---
-def send_premium_file(chat_id, fname):
-    path = os.path.join(FILES_DIR, fname)
-    if os.path.exists(path):
-        bot.send_chat_action(chat_id, 'upload_document')
-        st = bot.send_message(chat_id, f"📡 <b>Processing:</b> <code>{fname}</code>...")
-        try:
-            with open(path, 'rb') as f:
-                bot.send_document(chat_id, f, caption=f"💎 <b>File:</b> <code>{fname}</code>\n🚀 <b>Delivered by: @DUModZ</b>")
-            bot.delete_message(chat_id, st.message_id)
-        except Exception as e:
-            bot.edit_message_text(f"❌ Error: {e}", chat_id, st.message_id)
-    else:
-        bot.send_message(chat_id, "⚠️ File not found. Use /list to refresh.")
-
-# --- DYNAMIC COMMAND & SEARCH HANDLER ---
-@bot.message_handler(func=lambda m: True)
-def text_handler(message):
-    uid = message.from_user.id
-    if uid in load_db(BANNED_FILE): return
-    if not is_joined(uid): return force_join(message.chat.id)
-
-    text = message.text.lower()
-    files = get_clean_files()
-
-    # ১. কমান্ড দিয়ে ডাউনলোড (e.g. /my_file)
-    if text.startswith('/'):
-        target = text[1:]
-        for f in files:
-            if target == name_to_cmd(f):
-                send_premium_file(message.chat.id, f)
-                return
-        bot.reply_to(message, "❌ Unknown command. Use /list for all files.")
-        return
-
-    # ২. নাম দিয়ে সার্চ
-    matches = [f for f in files if text in f.lower()]
-    if matches:
-        mk = types.InlineKeyboardMarkup(row_width=1)
-        for m in matches[:10]:
-            mk.add(types.InlineKeyboardButton(f"📥 {m}", callback_data=f"dl_{m}"))
-        bot.reply_to(message, f"🔍 <b>Found {len(matches)} matches:</b>", reply_markup=mk)
-
-def process_broadcast(message):
-    users = load_db(DB_FILE)
-    bot.send_message(message.chat.id, "🚀 Broadcast started...")
-    count = 0
-    for u in users:
-        try:
-            bot.copy_message(u['id'], message.chat.id, message.message_id)
-            count += 1
-            time.sleep(0.05)
-        except: pass
-    bot.send_message(message.chat.id, f"✅ Sent to {count} users.")
-
-# --- BOOT ---
+# --- BOOT ENGINE ---
 if __name__ == "__main__":
-    print("🚀 DUModZ PRO System: Online")
-    try: bot.send_message(LOG_CHANNEL, "🟢 <b>Bot Rebooted</b>\nSync Engine: <b>Perfect</b>")
-    except: pass
-    bot.infinity_polling(skip_pending=True)_id, tmp.message_id)
-            track_msg(chat_id, doc.message_id)
-            send_log(f"File Downloaded: {fname} by {uid}")
+    print("🚀 DUModZ PRO: Online")
+    while True:
+        try:
+            bot.infinity_polling(skip_pending=True, timeout=60)
         except Exception as e:
-            bot.edit_message_text(f"❌ Error: {e}", chat_id, tmp.message_id)
-    else: bot.send_message(chat_id, "⚠️ File not found.")
-
+            print(f"Error: {e}")
+            time.sleep(5)
 def force_join_msg(chat_id):
     mk = types.InlineKeyboardMarkup(row_width=1)
     for ch in REQUIRED_CHANNELS:
