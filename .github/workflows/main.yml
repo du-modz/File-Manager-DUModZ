@@ -5,6 +5,7 @@ on:
     - cron: "0 */4 * * *" # প্রতি ৪ ঘণ্টা পর পর রান হবে
   workflow_dispatch: # ম্যানুয়ালি রান করার জন্য
 
+# এই অংশটি আগের চলমান বোট বন্ধ করে নতুনটি শুরু করবে (Conflict ফিক্স করবে)
 concurrency:
   group: telegram-bot
   cancel-in-progress: true
@@ -12,6 +13,7 @@ concurrency:
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+    # গিটহাব অ্যাকশনের ম্যাক্সিমাম টাইমলিমিট সেট করা (যাতে ৪ ঘণ্টার মধ্যে শেষ হয়)
     timeout-minutes: 350 
     
     steps:
@@ -24,15 +26,12 @@ jobs:
           python-version: '3.9'
 
       - name: Install Dependencies
-        run: |
-          pip install pyTelegramBotAPI requests
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+        run: pip install -r requirements.txt
 
       - name: Run Telegram Bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
         run: |
-          # ড্রপ পেন্ডিং আপডেট যাতে বোট চালু হয়েই পুরনো সব মেসেজ রিপ্লাই না দেয়
+          # কোনো পুরনো ওয়েবহুক থাকলে তা ডিলিট করে ফ্রেশ স্টার্ট করবে
           python -c "import requests; requests.get('https://api.telegram.org/bot${{ secrets.BOT_TOKEN }}/deleteWebhook?drop_pending_updates=True')"
-          # বোট রান করা (এরর আসলেও যেন লুপের মাধ্যমে আবার ট্রাই করে)
           python bot.py
